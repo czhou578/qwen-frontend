@@ -21,7 +21,18 @@ function MessageBubble({ message }) {
               : 'text-[#d9d9d9]'
           }`}
         >
-          {message.content}
+          {message.type === 'audio' ? (
+            <div className="flex items-center gap-2">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M9 18V5L12 3L15 5V18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                <circle cx="6" cy="18" r="3" stroke="currentColor" strokeWidth="2" />
+                <circle cx="18" cy="15" r="3" stroke="currentColor" strokeWidth="2" />
+              </svg>
+              <audio src={message.url} controls className="h-8 max-w-[200px]" />
+            </div>
+          ) : (
+            message.content
+          )}
         </div>
 
         {!isUser && message.id && (

@@ -3,7 +3,7 @@ import MessageInput from './MessageInput'
 import MessageBubble from './MessageBubble'
 import Footer from './Footer'
 
-function ChatArea({ messages, inputValue, onInputChange, onSend, isTyping, onToggleSidebar }) {
+function ChatArea({ messages, inputValue, onInputChange, onSend, isTyping, onToggleSidebar, onRecording }) {
   const scrollRef = useRef(null)
 
   // Auto-scroll when messages change or typing ends
@@ -96,6 +96,7 @@ function ChatArea({ messages, inputValue, onInputChange, onSend, isTyping, onTog
           onInputChange={onInputChange}
           onSend={onSend}
           isTyping={isTyping}
+          onRecording={onRecording}
         />
       </div>
 

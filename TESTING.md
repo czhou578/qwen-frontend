@@ -111,3 +111,5 @@ curl -s -X POST "http://localhost:8080/orchestrate/audio?voice=af_bella" \
 ## Key things to know
 
 The orchestrator imports `parakeet.asr` and `kokoro.tts` directly as Python modules (not as separate HTTP services), so it needs to be run from the `backend/` directory on the same machine where those packages are installed. Only vLLM is called over HTTP.
+
+BACKEND FREEZES

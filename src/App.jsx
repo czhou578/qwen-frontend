@@ -92,6 +92,13 @@ function App() {
     setInputValue('')
   }
 
+  const onRecording = (blob) => {
+    // Create an audio message bubble; backend upload comes later
+    const url = URL.createObjectURL(blob)
+    const msg = { id: Date.now(), role: 'user', type: 'audio', url }
+    setMessages(prev => [...prev, msg])
+  }
+
   return (
     <div className="flex h-screen w-full bg-[#171717] text-white overflow-hidden">
       <Sidebar onNewChat={newChat} />
@@ -101,6 +108,7 @@ function App() {
         onInputChange={setInputValue}
         onSend={sendMessage}
         isTyping={isTyping}
+        onRecording={onRecording}
       />
     </div>
   )
