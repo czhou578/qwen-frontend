@@ -13,15 +13,23 @@ Listens on port 8080.
 import json
 import logging
 import os
+import sys
 import tempfile
+
+# Ensure the backend parent directory is on the path so sibling packages
+# (kokoro, parakeet, api) are importable when this script is run directly.
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+_backend_root = os.path.dirname(_current_dir)
+if _backend_root not in sys.path:
+    sys.path.insert(0, _backend_root)
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from kokoro.tts import save_to_wav, synthesize
-from parakeet.asr import transcribe
+from kokoro_service.tts import save_to_wav, synthesize
+from parakeet_service.asr import transcribe
 
 logger = logging.getLogger(__name__)
 
@@ -207,7 +215,7 @@ async def health():
 def main():
     """Run the orchestrator service."""
     uvicorn.run(
-        "backend.api.orchestrator:app",
+        "api.orchestrator:app",
         host="0.0.0.0",
         port=8080,
         log_level="info",
