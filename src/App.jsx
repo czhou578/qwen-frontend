@@ -1,32 +1,93 @@
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import Sidebar from './components/Sidebar'
 import ChatArea from './components/ChatArea'
+
+const API_URL = 'http://localhost:8000/v1/chat/completions'
 
 function App() {
   const [messages, setMessages] = useState([])
   const [inputValue, setInputValue] = useState('')
   const [isTyping, setIsTyping] = useState(false)
 
-  const sendMessage = (text) => {
-    if (!text.trim()) return
-    const userMessage = { id: Date.now(), role: 'user', content: text, timestamp: new Date() }
-    setMessages(prev => [...prev, userMessage])
+  const sendMessage = useCallback((text) => {
+    if (!text.trim() || isTyping) return
+
+    // Add user message
+    const userMsg = { id: Date.now(), role: 'user', content: text }
+    setMessages(prev => [...prev, userMsg])
     setInputValue('')
     setIsTyping(true)
 
-    setTimeout(() => {
-      const aiMessage = {
-        id: Date.now() + 1,
-        role: 'assistant',
-        content: `This is a simulated response to: "${text}"
+    // Create placeholder for assistant response
+    const assistantId = Date.now() + 1
+    setMessages(prev => [...prev, { id: assistantId, role: 'assistant', content: '', _streaming: true }])
 
-In a real implementation, this would connect to an AI model to generate intelligent responses.`,
-        timestamp: new Date(),
-      }
-      setMessages(prev => [...prev, aiMessage])
-      setIsTyping(false)
-    }, 1500)
-  }
+    // Stream from vLLM
+    fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'qwen3.6-35b-a3b-nvfp4',
+        messages: [{ role: 'user', content: text }],
+        stream: true,
+        max_tokens: 4096,
+        temperature: 0.7,
+        top_p: 0.95,
+      }),
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop()
+
+          for (const line of lines) {
+            const trimmed = line.trim()
+            if (!trimmed || !trimmed.startsWith('data: ')) continue
+            const data = trimmed.slice(6)
+            if (data === '[DONE]') break
+
+            try {
+              const json = JSON.parse(data)
+              const token = json.choices?.[0]?.delta?.content
+              if (token) {
+                setMessages(prev => prev.map(m =>
+                  m.id === assistantId
+                    ? { ...m, content: m.content + token }
+                    : m
+                ))
+              }
+            } catch {
+              // skip malformed SSE fragments
+            }
+          }
+        }
+
+        // Remove streaming flag
+        setMessages(prev => prev.map(m =>
+          m.id === assistantId ? { ...m, _streaming: false } : m
+        ))
+        setIsTyping(false)
+      })
+      .catch((err) => {
+        // Error fallback
+        setMessages(prev => prev.map(m =>
+          m.id === assistantId
+            ? { ...m, content: `\n\n⚠ Error connecting to vLLM: ${err.message}`, _streaming: false }
+            : m
+        ))
+        setIsTyping(false)
+      })
+  }, [isTyping])
 
   const newChat = () => {
     setMessages([])

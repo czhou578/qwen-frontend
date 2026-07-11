@@ -1,9 +1,25 @@
+import { useRef, useEffect } from 'react'
+
 function MessageInput({ inputValue, onInputChange, onSend, isTyping }) {
-  const textareaRef = null
+  const textareaRef = useRef(null)
+
+  // Auto-resize textarea as user types
+  useEffect(() => {
+    const textarea = textareaRef.current
+    if (!textarea) return
+    textarea.style.height = 'auto'
+    textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px'
+  }, [inputValue])
 
   const handleSubmit = () => {
     if (inputValue.trim() && !isTyping) {
       onSend(inputValue.trim())
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto'
+          textareaRef.current.style.height = '44px'
+        }
+      }, 100)
     }
   }
 
@@ -24,8 +40,8 @@ function MessageInput({ inputValue, onInputChange, onSend, isTyping }) {
           onKeyDown={handleKeyDown}
           placeholder="Send a message..."
           rows={1}
+          disabled={isTyping}
           className="w-full bg-transparent text-white placeholder-[#6b6b6b] px-4 py-3 pr-12 resize-none outline-none text-sm max-h-[200px] min-h-[44px]"
-          style={{ height: 'auto', minHeight: '44px' }}
         />
         <div className="absolute right-2 top-2">
           <button
@@ -43,8 +59,9 @@ function MessageInput({ inputValue, onInputChange, onSend, isTyping }) {
           </button>
         </div>
       </div>
+
       <p className="text-center text-[11px] text-[#6b6b6b] mt-2 px-4">
-        Gemini can make mistakes. Consider checking important information.
+        Qwen can make mistakes. Consider checking important information.
       </p>
     </div>
   )
