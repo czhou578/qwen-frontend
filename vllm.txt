@@ -27,5 +27,3 @@ docker run -d \
     --enable-chunked-prefill \
     --max-num-batched-tokens 8192 \
     --async-scheduling
-
-    
