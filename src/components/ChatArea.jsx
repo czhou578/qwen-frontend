@@ -60,7 +60,7 @@ function ChatArea({ messages, inputValue, onInputChange, onSend, isTyping, onTog
           /* Messages list - full width */
           <div className="pb-4">
             {messages.map((msg) => {
-              // Streaming messages: render the accumulated content with a cursor
+              // Streaming messages: render the accumulated content (cursor removed)
               if (msg._streaming) {
                 return (
                   <div key={msg.id} className="flex items-start gap-3 px-4 py-3">
@@ -71,19 +71,13 @@ function ChatArea({ messages, inputValue, onInputChange, onSend, isTyping, onTog
                     </div>
                     <div className="flex-1 min-w-0">
                       {msg.content ? (
-                        <>
-                          <p className="text-sm whitespace-pre-wrap text-[#d9d9d9] pr-1">{msg.content}</p>
-                          <span className="inline-block w-[2px] h-[1em] bg-white animate-pulse ml-0.5"></span>
-                        </>
+                        <p className="text-sm whitespace-pre-wrap text-[#d9d9d9] pr-1">{msg.content}</p>
                       ) : (
-                        <>
-                          <div className="flex gap-1 mt-3">
-                            <span className="w-2 h-2 bg-[#8a8a8a] rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></span>
-                            <span className="w-2 h-2 bg-[#8a8a8a] rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></span>
-                            <span className="w-2 h-2 bg-[#8a8a8a] rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></span>
-                          </div>
-                          <span className="inline-block w-[2px] h-[1em] bg-white animate-pulse ml-0.5 mt-1.5"></span>
-                        </>
+                        <div className="flex gap-1 mt-3">
+                          <span className="w-2 h-2 bg-[#8a8a8a] rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></span>
+                          <span className="w-2 h-2 bg-[#8a8a8a] rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></span>
+                          <span className="w-2 h-2 bg-[#8a8a8a] rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></span>
+                        </div>
                       )}
                     </div>
                   </div>
