@@ -101,7 +101,7 @@ vlc /tmp/response.wav
 ```bash
 # Use any audio file you have
 curl -s -X POST "http://localhost:8080/orchestrate/audio?voice=af_bella" \
-  -F 'file=@/path/to/your/audio.wav' \
+  -F 'file=@/home/colin-spark/Projects/qwen-frontend/backend/output.wav' \
   -o /tmp/response.wav \
   -w "%{http_code}"
 ```

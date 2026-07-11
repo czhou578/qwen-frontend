@@ -162,7 +162,13 @@ async def orchestrate_audio(file: UploadFile = File(...), voice: str = Query(TTS
 
         # 3. vLLM → response
         logger.info("Calling vLLM with: %s", text)
-        response_text = await _call_vllm(text)
+        response_text = await _call_vllm(
+            text,
+            model=VLLM_MODEL,
+            max_tokens=2048,
+            temperature=0.7,
+            top_p=0.95,
+        )
         logger.info("vLLM response length: %d bytes", len(response_text))
 
     finally:
