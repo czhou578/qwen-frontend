@@ -10,11 +10,22 @@ End-to-end flow::
 Listens on port 8080.
 """
 
+import asyncio
 import json
 import logging
 import os
 import sys
 import tempfile
+import warnings
+
+# Suppress library-level noise from transformers/torch/kokoro.
+# These are informational/deprecation warnings from third-party code — the pipeline
+# works correctly with the defaults; we just don't want the noise in logs.
+warnings.filterwarnings("ignore", module="transformers")
+warnings.filterwarnings("ignore", module="torch")
+warnings.filterwarnings("ignore", module="kokoro")
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
 
 # Ensure the backend parent directory is on the path so sibling packages
 # (kokoro, parakeet, api) are importable when this script is run directly.
@@ -28,8 +39,8 @@ from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from kokoro_service.tts import save_to_wav, synthesize
-from parakeet_service.asr import transcribe
+from kokoro_service.tts import save_to_wav, synthesize, _get_pipeline as _get_tts_pipeline
+from parakeet_service.asr import transcribe, _get_pipeline as _get_asr_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +53,35 @@ TTS_VOICE = os.environ.get("TTS_VOICE", "af_bella")
 
 # --------------- app ---------------
 
+def _preload_models():
+    """Eagerly load ASR and TTS models at startup so the first request
+    doesn't pay the cold-start latency or emit noisy warnings mid-request.
+    """
+    import torch
+
+    # ASR — loads ~2 GB
+    logger.info("Loading Parakeet ASR model (first run downloads ~2 GB)…")
+    _get_asr_pipeline()
+    logger.info("Parakeet ASR model loaded.")
+
+    # Kokoro TTS — loads Kokoro weights on first pipeline call
+    logger.info("Loading Kokoro TTS pipeline…")
+    _get_tts_pipeline()
+    logger.info("Kokoro TTS pipeline loaded.")
+
+
 app = FastAPI(
     title="Qwen Orchestrator",
     description="ASR → vLLM → Kokoro TTS pipeline (single audio-in / audio-out endpoint).",
 )
+
+# --------------- startup ---------------
+
+
+@app.on_event("startup")
+def startup():
+    """Warm up ASR and TTS models before accepting traffic."""
+    _preload_models()
 
 
 # --------------- request / response models ---------------
@@ -107,21 +143,27 @@ async def _call_vllm(text: str, *, model: str, max_tokens: int,
 
 
 async def _tts_stream(text: str, voice: str) -> StreamingResponse:
-    """Generate audio from *text* with Kokoro and stream the WAV bytes back."""
+    """Generate audio from *text* with Kokoro and stream the WAV bytes back.
 
-    tmp = tempfile.mktemp(prefix="qwen_tts_", suffix=".wav")
-    try:
-        save_to_wav(text, tmp, voice=voice)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"TTS failed: {exc}") from exc
+    The blocking ``save_to_wav`` call runs inside the generator, which FastAPI
+    executes in a background thread — keeping the event loop unblocked.
+    """
 
     def stream_bytes():
-        with open(tmp, "rb") as fh:
-            while True:
-                chunk = fh.read(8192)
-                if not chunk:
-                    break
-                yield chunk
+        tmp = tempfile.mktemp(prefix="qwen_tts_", suffix=".wav")
+        try:
+            logger.info("Running TTS …")
+            save_to_wav(text, tmp, voice=voice)
+            logger.info("Saved TTS output to %s", tmp)
+            with open(tmp, "rb") as fh:
+                while True:
+                    chunk = fh.read(8192)
+                    if not chunk:
+                        break
+                    yield chunk
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
 
     return StreamingResponse(
         stream_bytes(),
@@ -150,12 +192,12 @@ async def orchestrate_audio(file: UploadFile = File(...), voice: str = Query(TTS
     tmp_audio = tempfile.mktemp(prefix="qwen_asr_")
     try:
         content = await file.read()
-        with open(tmp_audio, "wb") as fh:
-            fh.write(content)
+        logger.info("Reading uploaded audio (%d bytes)…", len(content))
+        await asyncio.to_thread(lambda: open(tmp_audio, "wb").write(content))
 
-        # 2. ASR → text
-        logger.info("Running ASR on uploaded audio…")
-        text = transcribe(tmp_audio)
+        # 2. ASR → text (blocking call → run in background thread)
+        logger.info("Running ASR on uploaded audio …")
+        text = await asyncio.to_thread(transcribe, tmp_audio)
         if not text:
             raise HTTPException(status_code=400, detail="ASR returned empty transcription.")
         logger.info("ASR result: %s", text)
