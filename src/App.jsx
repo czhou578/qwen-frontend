@@ -2,9 +2,6 @@ import { useState, useCallback } from 'react'
 import Sidebar from './components/Sidebar'
 import ChatArea from './components/ChatArea'
 
-// Replace with your actual vLLM server URL
-const VLLM_URL = 'http://localhost:8000'
-
 function App() {
   const [messages, setMessages] = useState([])
   const [inputValue, setInputValue] = useState('')
@@ -23,8 +20,8 @@ function App() {
     const assistantId = Date.now() + 1
     setMessages(prev => [...prev, { id: assistantId, role: 'assistant', content: '', _streaming: true }])
 
-    // Call vLLM directly
-    fetch(`${VLLM_URL}/v1/chat/completions`, {
+    // Stream through proxy server (API key handled server-side)
+    fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -83,7 +80,7 @@ function App() {
         // Error fallback
         setMessages(prev => prev.map(m =>
           m.id === assistantId
-            ? { ...m, content: `\n\n⚠ Could not reach vLLM:\n${err.message}\n\nMake sure your vLLM server is accessible.`, _streaming: false }
+            ? { ...m, content: `\n\n⚠ Error connecting to proxy: ${err.message}`, _streaming: false }
             : m
         ))
         setIsTyping(false)
