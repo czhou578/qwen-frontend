@@ -2,7 +2,8 @@ import { useState, useCallback } from 'react'
 import Sidebar from './components/Sidebar'
 import ChatArea from './components/ChatArea'
 
-const API_URL = 'http://localhost:8000/v1/chat/completions'
+const API_URL = `${import.meta.env.VITE_VLLM_BASE_URL || 'http://localhost:8000'}/v1/chat/completions`
+const API_KEY = import.meta.env.VITE_VLLM_API_KEY
 
 function App() {
   const [messages, setMessages] = useState([])
@@ -22,10 +23,13 @@ function App() {
     const assistantId = Date.now() + 1
     setMessages(prev => [...prev, { id: assistantId, role: 'assistant', content: '', _streaming: true }])
 
-    // Stream from vLLM
+    // Stream from vLLM with API key
     fetch(API_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': API_KEY ? `Bearer ${API_KEY}` : '',
+      },
       body: JSON.stringify({
         model: 'qwen3.6-35b-a3b-nvfp4',
         messages: [{ role: 'user', content: text }],
