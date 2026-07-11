@@ -64,7 +64,7 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-    audio_file = sys.argv[1] if len(sys.argv) > 1 else "audio.wav"
+    audio_file = sys.argv[1] if len(sys.argv) > 1 else "../backend/output.wav"
     print(f"Transcribing: {audio_file}")
     text = transcribe(audio_file)
     print(f"Result: {text}")
