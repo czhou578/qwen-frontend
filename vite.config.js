@@ -7,4 +7,13 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   // GitHub Pages repo name — this ensures all asset paths are prefixed
   base: '/qwen-frontend/',
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+        secure: false,
+      },
+    },
+  },
 })

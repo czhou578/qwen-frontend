@@ -2,9 +2,6 @@ import { useState, useCallback } from 'react'
 import Sidebar from './components/Sidebar'
 import ChatArea from './components/ChatArea'
 
-const API_URL = `${import.meta.env.VITE_VLLM_BASE_URL || 'http://localhost:8000'}/v1/chat/completions`
-const API_KEY = import.meta.env.VITE_VLLM_API_KEY
-
 function App() {
   const [messages, setMessages] = useState([])
   const [inputValue, setInputValue] = useState('')
@@ -23,13 +20,10 @@ function App() {
     const assistantId = Date.now() + 1
     setMessages(prev => [...prev, { id: assistantId, role: 'assistant', content: '', _streaming: true }])
 
-    // Stream from vLLM with API key
-    fetch(API_URL, {
+    // Stream through proxy server (API key handled server-side)
+    fetch('/api/chat', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': API_KEY ? `Bearer ${API_KEY}` : '',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'qwen3.6-35b-a3b-nvfp4',
         messages: [{ role: 'user', content: text }],
@@ -86,7 +80,7 @@ function App() {
         // Error fallback
         setMessages(prev => prev.map(m =>
           m.id === assistantId
-            ? { ...m, content: `\n\n⚠ Error connecting to vLLM: ${err.message}`, _streaming: false }
+            ? { ...m, content: `\n\n⚠ Error connecting to proxy: ${err.message}`, _streaming: false }
             : m
         ))
         setIsTyping(false)
