@@ -1,15 +1,23 @@
 import { useRef, useEffect, useState } from 'react'
 
-function MessageInput({ inputValue, onInputChange, onSend, isTyping, onRecording }) {
+function MessageInput({
+  inputValue,
+  onInputChange,
+  onSend,
+  isTyping,
+  onRecording,
+  isRecording: parentIsRecording,
+  onMicStart,
+  onMicStop,
+}) {
   const textareaRef = useRef(null)
   const mediaRecorderRef = useRef(null)
   const streamRef = useRef(null)
   const chunksRef = useRef([])
   const timerRef = useRef(null)
 
-  const [isRecording, setIsRecording] = useState(false)
-  const [recordingTime, setRecordingTime] = useState(0)
   const [permissionError, setPermissionError] = useState(false)
+  const [recordingTime, setRecordingTime] = useState(0)
 
   // Auto-resize textarea as user types
   useEffect(() => {
@@ -64,8 +72,7 @@ function MessageInput({ inputValue, onInputChange, onSend, isTyping, onRecording
       }
 
       mediaRecorder.start()
-      setIsRecording(true)
-      setRecordingTime(0)
+      if (onMicStart) onMicStart()
       setPermissionError(false)
 
       timerRef.current = setInterval(() => {
@@ -86,13 +93,15 @@ function MessageInput({ inputValue, onInputChange, onSend, isTyping, onRecording
       clearInterval(timerRef.current)
       timerRef.current = null
     }
-    setIsRecording(false)
-    setRecordingTime(0)
+    if (onMicStop) onMicStop()
   }
 
   const handleMicToggle = () => {
-    if (isRecording) {
+    // If already recording, stop it
+    if (parentIsRecording) {
       stopRecording()
+    } else if (isTyping) {
+      return  // prevent re-entry while backend is processing
     } else {
       startRecording()
     }
@@ -120,15 +129,15 @@ function MessageInput({ inputValue, onInputChange, onSend, isTyping, onRecording
             onClick={handleMicToggle}
             disabled={isTyping}
             className={`flex-shrink-0 p-2 rounded-md transition-colors ${isTyping ? 'opacity-40 cursor-default' : ''
-              } ${isRecording
+              } ${parentIsRecording
                 ? 'text-red-400 bg-[#2f2f2f]'
                 : inputValue.trim() && !isTyping
                   ? 'text-white hover:bg-[#2f2f2f]'
                   : 'text-[#6b6b6b] cursor-default'
               }`}
-            aria-label={isRecording ? 'Stop recording' : 'Record audio'}
+            aria-label={parentIsRecording ? 'Stop recording' : 'Record audio'}
           >
-            {isRecording ? (
+            {parentIsRecording ? (
               /* Stop icon */
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" />
@@ -173,7 +182,7 @@ function MessageInput({ inputValue, onInputChange, onSend, isTyping, onRecording
         </div>
 
         {/* Recording indicator */}
-        {isRecording && (
+        {parentIsRecording && (
           <div className="flex items-center gap-2 px-4 py-1.5 border-t border-[#2f2f2f]">
             <span className="relative flex h-2.5 w-2.5">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />

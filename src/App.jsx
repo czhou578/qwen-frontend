@@ -1,11 +1,15 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import Sidebar from './components/Sidebar'
 import ChatArea from './components/ChatArea'
+
+const API_BASE = '/orchestrate'
 
 function App() {
   const [messages, setMessages] = useState([])
   const [inputValue, setInputValue] = useState('')
   const [isTyping, setIsTyping] = useState(false)
+  const [isRecording, setIsRecording] = useState(false)
+  const uploadAbortRef = useRef(null)
 
   const sendMessage = useCallback((text) => {
     if (!text.trim() || isTyping) return
@@ -92,12 +96,91 @@ function App() {
     setInputValue('')
   }
 
-  const onRecording = (blob) => {
-    // Create an audio message bubble; backend upload comes later
-    const url = URL.createObjectURL(blob)
-    const msg = { id: Date.now(), role: 'user', type: 'audio', url }
-    setMessages(prev => [...prev, msg])
-  }
+  // Handle recorded audio blob → full pipeline
+  const handleRecording = useCallback((blob) => {
+    if (isTyping) return
+
+    // 1. Create user audio message
+    const userMsg = {
+      id: Date.now(),
+      role: 'user',
+      type: 'audio',
+      url: URL.createObjectURL(blob),
+      contentType: blob.type,
+    }
+    setMessages(prev => [...prev, userMsg])
+
+    // Create placeholder for assistant text response
+    const assistantId = Date.now() + 1
+    const assistantMsg = { id: assistantId, role: 'assistant', content: '', _streaming: true, _voiceStatus: 'uploading' }
+
+    // 2. Two parallel requests:
+    //    a) Text from audio (transcript + vLLM response)
+    //    b) Audio from audio (TTS WAV blob)
+    const controller = new AbortController()
+    uploadAbortRef.current = () => controller.abort()
+
+    setMessages(prev => [...prev, assistantMsg])
+
+    const uploadText = fetch(`${API_BASE}/text-from-audio`, {
+      method: 'POST',
+      body: blob,
+      signal: controller.signal,
+    })
+    .then(res => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return res.json()
+    })
+
+    const uploadAudio = fetch(`${API_BASE}/audio`, {
+      method: 'POST',
+      body: blob,
+      signal: controller.signal,
+    })
+    .then(async res => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const audioBlob = await res.blob()
+      return URL.createObjectURL(audioBlob)
+    })
+
+    // 3. Wait for text response to update the streaming message
+    uploadText
+      .then(data => {
+        setMessages(prev => prev.map(m =>
+          m.id === assistantId
+            ? { ...m, _streaming: false, _voiceStatus: null, content: data.text }
+            : m
+        ))
+      })
+      .catch(err => {
+        if (err.name !== 'AbortError') {
+          setMessages(prev => prev.map(m =>
+            m.id === assistantId
+              ? { ...m, _streaming: false, _voiceStatus: null, content: `\n\n⚠ Error: ${err.message}` }
+              : m
+          ))
+        }
+      })
+
+    // 4. When audio is ready, attach TTS URL to the same assistant message
+    uploadAudio
+      .then(audioUrl => {
+        setMessages(prev => prev.map(m =>
+          m.id === assistantId
+            ? { ...m, audioUrl }
+            : m
+        ))
+      })
+      .catch(err => {
+        if (err.name !== 'AbortError') {
+          console.error('TTS audio failed:', err)
+        }
+      })
+      .finally(() => {
+        setIsTyping(false)
+        uploadAbortRef.current = null
+      })
+  }, [isTyping])
 
   return (
     <div className="flex h-screen w-full bg-[#171717] text-white overflow-hidden">
@@ -108,7 +191,10 @@ function App() {
         onInputChange={setInputValue}
         onSend={sendMessage}
         isTyping={isTyping}
-        onRecording={onRecording}
+        onRecording={handleRecording}
+        isRecording={isRecording}
+        onMicStart={() => setIsRecording(true)}
+        onMicStop={() => setIsRecording(false)}
       />
     </div>
   )

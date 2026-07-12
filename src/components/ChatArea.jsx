@@ -3,7 +3,7 @@ import MessageInput from './MessageInput'
 import MessageBubble from './MessageBubble'
 import Footer from './Footer'
 
-function ChatArea({ messages, inputValue, onInputChange, onSend, isTyping, onToggleSidebar, onRecording }) {
+function ChatArea({ messages, inputValue, onInputChange, onSend, isTyping, onToggleSidebar, onRecording, isRecording, onMicStart, onMicStop }) {
   const scrollRef = useRef(null)
 
   // Auto-scroll when messages change or typing ends
@@ -12,6 +12,16 @@ function ChatArea({ messages, inputValue, onInputChange, onSend, isTyping, onTog
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
   }, [messages, isTyping])
+
+  // Status labels for voice message states
+  function statusLabel(status) {
+    switch (status) {
+      case 'uploading': return 'Uploading...'
+      case 'processing': return 'Thinking...'
+      case 'done': return 'Done!'
+      default: return 'Processing...'
+    }
+  }
 
   return (
     <div className="flex-1 flex flex-col h-full relative w-full overflow-hidden">
@@ -60,8 +70,9 @@ function ChatArea({ messages, inputValue, onInputChange, onSend, isTyping, onTog
           /* Messages list - full width */
           <div className="pb-4">
             {messages.map((msg) => {
-              // Streaming messages: render the accumulated content (cursor removed)
+              // Streaming assistant messages (text or voice)
               if (msg._streaming) {
+                const isVoice = msg._voiceStatus !== undefined && msg._voiceStatus !== null
                 return (
                   <div key={msg.id} className="flex items-start gap-3 px-4 py-3">
                     <div className="w-7 h-7 rounded-full bg-gradient-to-br from-emerald-400 to-cyan-500 flex items-center justify-center flex-shrink-0 mt-0.5">
@@ -73,10 +84,18 @@ function ChatArea({ messages, inputValue, onInputChange, onSend, isTyping, onTog
                       {msg.content ? (
                         <p className="text-sm whitespace-pre-wrap text-[#d9d9d9] pr-1">{msg.content}</p>
                       ) : (
-                        <div className="flex gap-1 mt-3">
-                          <span className="w-2 h-2 bg-[#8a8a8a] rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></span>
-                          <span className="w-2 h-2 bg-[#8a8a8a] rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></span>
-                          <span className="w-2 h-2 bg-[#8a8a8a] rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></span>
+                        <div className="flex flex-col gap-1 mt-3">
+                          {isVoice ? (
+                            <p className="text-sm text-[#8a8a8a] italic">
+                              {statusLabel(msg._voiceStatus)}
+                            </p>
+                          ) : (
+                            <div className="flex gap-1 mt-3">
+                              <span className="w-2 h-2 bg-[#8a8a8a] rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></span>
+                              <span className="w-2 h-2 bg-[#8a8a8a] rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></span>
+                              <span className="w-2 h-2 bg-[#8a8a8a] rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></span>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -97,6 +116,9 @@ function ChatArea({ messages, inputValue, onInputChange, onSend, isTyping, onTog
           onSend={onSend}
           isTyping={isTyping}
           onRecording={onRecording}
+          isRecording={isRecording}
+          onMicStart={onMicStart}
+          onMicStop={onMicStop}
         />
       </div>
 

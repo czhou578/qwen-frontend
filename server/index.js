@@ -9,27 +9,56 @@ const envPath = path.resolve(scriptDir, '.env')
 dotenv.config({ path: envPath, override: true })
 
 const app = express()
-app.use(express.json())
-
-const PORT = process.env.PORT || 3001
+const ORCHESTRATOR_URL = process.env.ORCHESTRATOR_URL || 'http://localhost:8080/qwen-frontend'
 const VLLM_BASE_URL = process.env.VLLM_BASE_URL || 'http://localhost:8000'
 const VLLM_API_KEY = process.env.VLLM_API_KEY || ''
 
-// Allow CORS for frontend
-app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-  if (req.method === 'OPTIONS') return res.sendStatus(200)
-  next()
+// Proxy /orchestrate to FastAPI orchestrator (raw body — needed for audio uploads)
+// Must come BEFORE express.json() so binary bodies aren't parsed
+app.use('/orchestrate', async (req, res, next) => {
+  const targetUrl = `${ORCHESTRATOR_URL}${req.originalUrl}`
+  console.log(`[proxy] ${req.method} ${targetUrl}`)
+
+  const fetchOptions = {
+    method: req.method,
+    headers: { ...req.headers },
+    ...(req.body ? { body: req.body } : {}),
+  }
+  // Remove content-length; Node auto-sets transfer-encoding: chunked
+  delete fetchOptions.headers['content-length']
+
+  try {
+    const response = await fetch(targetUrl, fetchOptions)
+    // Forward response headers (skip hop-by-hop)
+    for (const [key, value] of response.headers.entries()) {
+      if (!['transfer-encoding', 'connection'].includes(key.toLowerCase())) {
+        res.setHeader(key, value)
+      }
+    }
+    if (response.body) {
+      response.body.pipe(res)
+    } else {
+      res.end()
+    }
+  } catch (err) {
+    console.error(`[proxy] error: ${err.message}`)
+    res.status(502).json({ error: 'Backend unavailable', detail: err.message })
+  }
 })
+
+app.use(express.json())
 
 // Health check
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', vllmUrl: VLLM_BASE_URL, apiKey: VLLM_API_KEY ? '***' : 'none' })
+  res.json({
+    status: 'ok',
+    vllmUrl: VLLM_BASE_URL,
+    orchestratorUrl: ORCHESTRATOR_URL,
+    apiKey: VLLM_API_KEY ? '***' : 'none',
+  })
 })
 
-// Proxy /api/chat to vLLM
+// Proxy /api/chat to vLLM (JSON body)
 app.post('/api/chat', async (req, res) => {
   const startTime = Date.now()
 
@@ -137,8 +166,10 @@ app.post('/api/chat', async (req, res) => {
 })
 
 // Start server
+const PORT = process.env.PORT || 3001
 app.listen(PORT, () => {
   console.log(`Proxy server running at http://localhost:${PORT}`)
   console.log(`vLLM API: ${VLLM_BASE_URL}`)
+  console.log(`Orchestrator: ${ORCHESTRATOR_URL}`)
   console.log(`API Key: ${VLLM_API_KEY ? '*** configured' : 'none (vLLM should accept requests without auth)'}`)
 })

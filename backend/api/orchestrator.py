@@ -292,6 +292,51 @@ async def orchestrate_audio(file: UploadFile = File(...), voice: str = Query(TTS
     return _tts_stream_sync(response_text, voice=voice)
 
 
+@app.post("/orchestrate/text-from-audio")
+async def text_from_audio(file: UploadFile = File(...), voice: str = Query(TTS_VOICE)):
+    """ASR → vLLM only: upload audio, get text response as JSON (no TTS audio).
+
+    Used by the frontend in parallel with /orchestrate/audio so the
+    transcript can be displayed in chat while TTS audio plays.
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No audio file provided.")
+
+    tmp_audio = tempfile.mktemp(prefix="qwen_asr_")
+    try:
+        content = await file.read()
+        logger.info("Reading uploaded audio (%d bytes) for text-from-audio…", len(content))
+        with open(tmp_audio, "wb") as fh:
+            fh.write(content)
+
+        logger.info("Running ASR on uploaded audio for text-from-audio…")
+        text = await asyncio.to_thread(transcribe, tmp_audio)
+        if not text:
+            raise HTTPException(status_code=400, detail="ASR returned empty transcription.")
+        logger.info("ASR result for text-from-audio: %s", text)
+
+        logger.info("Calling vLLM for text-from-audio with: %s", text)
+        response_text = await _call_vllm(
+            text,
+            model=VLLM_MODEL,
+            max_tokens=2048,
+            temperature=0.7,
+            top_p=0.95,
+        )
+        logger.info("vLLM response length: %d bytes", len(response_text))
+
+    finally:
+        if os.path.exists(tmp_audio):
+            os.unlink(tmp_audio)
+
+    from fastapi.responses import JSONResponse
+    return JSONResponse({
+        "text": response_text,
+        "model": VLLM_MODEL,
+        "voice": voice,
+    })
+
+
 @app.post("/orchestrate/text",
           description="Text-chat variant: send text directly, get streamed audio back.")
 async def orchestrate_text(req: ChatRequest):
@@ -327,6 +372,7 @@ async def health():
         "endpoints": {
             "audio_pipeline": "POST /orchestrate/audio",
             "text_chat": "POST /orchestrate/text",
+            "voice_transcript": "POST /orchestrate/text-from-audio",
         },
     }
 

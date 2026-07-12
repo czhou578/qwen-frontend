@@ -1,5 +1,32 @@
+import AudioPlayer from './AudioPlayer'
+
 function MessageBubble({ message }) {
   const isUser = message.role === 'user'
+
+  // Helper: render content based on message type
+  function renderContent() {
+    // User audio message
+    if (message.type === 'audio') {
+      return (
+        <AudioPlayer src={message.url} />
+      )
+    }
+
+    // Assistant audio-text combo: content is text, audioUrl triggers audio player
+    if (message.role === 'assistant' && message.audioUrl) {
+      return (
+        <div className="flex flex-col gap-2">
+          <p className="text-sm whitespace-pre-wrap text-[#d9d9d9] pr-1">{message.content}</p>
+          <div className="mt-1">
+            <AudioPlayer src={message.audioUrl} />
+          </div>
+        </div>
+      )
+    }
+
+    // Regular text message
+    return <p className="text-sm whitespace-pre-wrap text-[#d9d9d9] pr-1">{message.content}</p>
+  }
 
   return (
     <div className={`flex items-start gap-3 px-4 py-3 ${isUser ? 'justify-end' : ''}`}>
@@ -15,27 +42,17 @@ function MessageBubble({ message }) {
       {/* Message content container */}
       <div className={`flex flex-col max-w-[75%] ${isUser ? 'items-end' : 'items-start'}`}>
         <div
-          className={`px-3.5 py-2 rounded-2xl text-sm whitespace-pre-wrap break-words ${
+          className={`px-3.5 py-2 rounded-2xl text-sm break-words ${
             isUser
               ? 'bg-[#2f2f2f] text-white'
               : 'text-[#d9d9d9]'
           }`}
         >
-          {message.type === 'audio' ? (
-            <div className="flex items-center gap-2">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M9 18V5L12 3L15 5V18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                <circle cx="6" cy="18" r="3" stroke="currentColor" strokeWidth="2" />
-                <circle cx="18" cy="15" r="3" stroke="currentColor" strokeWidth="2" />
-              </svg>
-              <audio src={message.url} controls className="h-8 max-w-[200px]" />
-            </div>
-          ) : (
-            message.content
-          )}
+          {renderContent()}
         </div>
 
-        {!isUser && message.id && (
+        {/* Action buttons for assistant messages */}
+        {!isUser && message.id && message.content && (
           <div className="flex items-center gap-2 mt-1.5 ml-1">
             <button
               className="p-1 rounded hover:bg-[#202020] transition-colors text-[#8a8a8a] hover:text-white"
@@ -54,24 +71,6 @@ function MessageBubble({ message }) {
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M1 4V10H7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                 <path d="M3.55 13.39A9 9 0 1 0 6.4 6.4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
-            <button
-              className="p-1 rounded hover:bg-[#202020] transition-colors text-[#8a8a8a] hover:text-white"
-              title="Thumbs up"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M14 9V5C14 3.90356 13.3696 3.10364 12.5591 2.72863C11.829 2.39266 11.0021 2.44621 10.3426 2.87617L6 5.5L7 13H14Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                <path d="M17 22L20 17H13C12.2044 17 11.5 16.2956 11.5 15.5C11.5 14.902 11.8378 14.3796 12.3611 14.165L17 9.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
-            <button
-              className="p-1 rounded hover:bg-[#202020] transition-colors text-[#8a8a8a] hover:text-white"
-              title="Thumbs down"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M14 15V19C14 20.0964 13.3696 20.8964 12.5591 21.2714C11.829 21.6073 11.0021 21.5538 10.3426 21.1238L6 18.5L7 10H14Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                <path d="M17 2L20 7H13C12.2044 7 11.5 6.29563 11.5 5.5C11.5 4.90203 11.8378 4.37959 12.3611 4.16505L17 8.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </button>
           </div>
