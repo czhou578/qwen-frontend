@@ -17,6 +17,16 @@ import os
 import sys
 import tempfile
 import warnings
+import torch
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+    force=True,
+)
+
+logger = logging.getLogger("orchestrator")
 
 # Suppress library-level noise from transformers/torch/kokoro.
 # These are informational/deprecation warnings from third-party code — the pipeline
@@ -26,6 +36,17 @@ warnings.filterwarnings("ignore", module="torch")
 warnings.filterwarnings("ignore", module="kokoro")
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
+
+# httpx logs every HTTP request at INFO level, including HF HEAD → 302 redirects.
+# Suppress the request log; errors are still emitted via logger.error() above.
+import httpx
+
+httpx_logger = logging.getLogger("httpx")
+httpx_logger.setLevel(logging.WARNING)
+
+# Also quieten the hf hub / misaki / kokoro noise (HEAD → 302, deprecations, …)
+for _quiet in ("huggingface_hub", "misaki", "kokoro"):
+    logging.getLogger(_quiet).setLevel(logging.WARNING)
 
 # Ensure the backend parent directory is on the path so sibling packages
 # (kokoro, parakeet, api) are importable when this script is run directly.
@@ -41,8 +62,6 @@ from pydantic import BaseModel
 
 from kokoro_service.tts import save_to_wav, synthesize, _get_pipeline as _get_tts_pipeline
 from parakeet_service.asr import transcribe, _get_pipeline as _get_asr_pipeline
-
-logger = logging.getLogger(__name__)
 
 # --------------- configuration ---------------
 
@@ -80,9 +99,9 @@ app = FastAPI(
 
 @app.on_event("startup")
 def startup():
-    """Warm up ASR and TTS models before accepting traffic."""
+    """Warm up ASR and TTS models and make all log handlers flush
+    after each write so logs appear in the terminal immediately."""
     _preload_models()
-
 
 # --------------- request / response models ---------------
 
@@ -142,18 +161,64 @@ async def _call_vllm(text: str, *, model: str, max_tokens: int,
         return body["choices"][0]["message"]["content"].strip()
 
 
-async def _tts_stream(text: str, voice: str) -> StreamingResponse:
-    """Generate audio from *text* with Kokoro and stream the WAV bytes back.
+def _call_vllm_sync(text: str, *, model: str, max_tokens: int,
+                     temperature: float, top_p: float) -> str:
+    """Send *text* to vLLM and return the assistant reply as a plain string.
 
-    The blocking ``save_to_wav`` call runs inside the generator, which FastAPI
-    executes in a background thread — keeping the event loop unblocked.
+    Uses a synchronous httpx.Client so this can be called from sync endpoints
+    without needing an event loop.
     """
+    url = f"{VLLM_BASE_URL.rstrip('/')}/v1/chat/completions"
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if VLLM_API_KEY:
+        headers["Authorization"] = f"Bearer {VLLM_API_KEY}"
+
+    payload = json.dumps({
+        "model": model,
+        "messages": [{"role": "user", "content": text}],
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "top_p": top_p,
+        "stream": False,
+    })
+
+    import httpx
+
+    with httpx.Client(timeout=120.0) as client:
+        resp = client.post(url, headers=headers, data=payload)
+        if not resp.is_success:
+            detail = resp.text[:500]
+            logger.error("vLLM error %s: %s", resp.status_code, detail)
+            raise HTTPException(
+                status_code=resp.status_code,
+                detail=f"vLLM returned {resp.status_code}: {detail}",
+            )
+        body = resp.json()
+        return body["choices"][0]["message"]["content"].strip()
+
+
+def _tts_stream_sync(text: str, voice: str) -> StreamingResponse:
+    """Synchronous version — used by sync endpoints so the generator
+    runs in uvicorn's background thread rather than on the event loop."""
 
     def stream_bytes():
         tmp = tempfile.mktemp(prefix="qwen_tts_", suffix=".wav")
         try:
-            logger.info("Running TTS …")
-            save_to_wav(text, tmp, voice=voice)
+            logger.info("Running TTS for %d characters …", len(text))
+            logger.info("Beginning save_to_wav()")
+            logger.info(
+                "Allocated: %.2f GB, Reserved: %.2f GB",
+                torch.cuda.memory_allocated() / 1024**3,
+                torch.cuda.memory_reserved() / 1024**3,
+            )
+
+            try:
+                save_to_wav(text, tmp, voice=voice)
+            except Exception:
+                logger.exception("save_to_wav() failed")
+                raise
+
+            logger.info("save_to_wav() finished")
             logger.info("Saved TTS output to %s", tmp)
             with open(tmp, "rb") as fh:
                 while True:
@@ -184,6 +249,11 @@ async def orchestrate_audio(file: UploadFile = File(...), voice: str = Query(TTS
 
     Accepts any audio format supported by the Parakeet pipeline
     (WAV, FLAC, MP3, M4A, OGG) and streams back a WAV response.
+
+    All blocking calls (ASR, file I/O) are pushed off the event loop
+    with ``asyncio.to_thread()``.  The TTS generation runs inside the
+    ``StreamingResponse`` generator which Starlette executes on a
+    background thread, so it never blocks the event loop.
     """
     if not file.filename:
         raise HTTPException(status_code=400, detail="No audio file provided.")
@@ -191,18 +261,19 @@ async def orchestrate_audio(file: UploadFile = File(...), voice: str = Query(TTS
     # 1. Write audio to temp file for ASR
     tmp_audio = tempfile.mktemp(prefix="qwen_asr_")
     try:
-        content = await file.read()
+        content = await file.read()  # fastapi UploadFile.read() is async
         logger.info("Reading uploaded audio (%d bytes)…", len(content))
-        await asyncio.to_thread(lambda: open(tmp_audio, "wb").write(content))
+        with open(tmp_audio, "wb") as fh:
+            fh.write(content)
 
-        # 2. ASR → text (blocking call → run in background thread)
+        # 2. ASR → text (blocking GPU call → background thread)
         logger.info("Running ASR on uploaded audio …")
         text = await asyncio.to_thread(transcribe, tmp_audio)
         if not text:
             raise HTTPException(status_code=400, detail="ASR returned empty transcription.")
         logger.info("ASR result: %s", text)
 
-        # 3. vLLM → response
+        # 3. vLLM → response (async — httpx doesn't block the event loop)
         logger.info("Calling vLLM with: %s", text)
         response_text = await _call_vllm(
             text,
@@ -217,8 +288,8 @@ async def orchestrate_audio(file: UploadFile = File(...), voice: str = Query(TTS
         if os.path.exists(tmp_audio):
             os.unlink(tmp_audio)
 
-    # 4. Kokoro TTS → stream audio
-    return await _tts_stream(response_text, voice=voice)
+    # 4. Kokoro TTS → stream audio (blocking done in background thread)
+    return _tts_stream_sync(response_text, voice=voice)
 
 
 @app.post("/orchestrate/text",
@@ -241,7 +312,7 @@ async def orchestrate_text(req: ChatRequest):
     logger.info("vLLM response length: %d bytes", len(response_text))
 
     # 2. Kokoro TTS → stream audio
-    return await _tts_stream(response_text, req.voice)
+    return await _tts_stream_sync(response_text, req.voice)
 
 
 @app.get("/orchestrate")

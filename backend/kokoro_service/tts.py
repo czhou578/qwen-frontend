@@ -11,6 +11,8 @@ Usage
 """
 
 import logging
+import torch
+import torchaudio
 from pathlib import Path
 
 from kokoro import KPipeline
@@ -107,13 +109,15 @@ def save_to_wav(
     Path
         Path to the written WAV file.
     """
-    import torch
-    import torchaudio
 
+    logger.info("Calling synthesize()")
     audio, sample_rate = synthesize(
         text, voice=voice, speed=speed, lang_code=lang_code, device=device
     )
 
+    logger.info("synthesize() returned")
+
+    logger.info("Saving wav...")
     # Ensure 1D tensor and float32 for torchaudio
     audio = audio.float().cpu()
     if audio.dim() > 1:
@@ -121,66 +125,11 @@ def save_to_wav(
 
     output_path = Path(output_path)
     torchaudio.save(str(output_path), audio.unsqueeze(0), sample_rate)
-    _fix_wav_data_chunk(output_path)
+    logger.info("torchaudio.save() returned")
+    # _fix_wav_data_chunk(output_path)
+    # logger.info("_fix_wav_data_chunk() returned")
     logger.info("Saved TTS output to %s", output_path)
     return output_path
-
-
-# --------------- WAV repair ---------------
-
-
-def _fix_wav_data_chunk(path: Path) -> None:
-    """Repair a WAV file whose ``data`` chunk size is wrong.
-
-    Some torchaudio versions write a stale 4-byte value into the ``data``
-    chunk header (often picking up a stray offset from the ``LIST INFO``
-    metadata).  We fix it in-place by walking chunks from offset 36,
-    finding every ``data`` chunk, and setting its size to the
-    correct value computed from the total file size.
-
-    Works in-place on the file at *path*.
-    """
-    import struct
-
-    with open(path, "r+b") as fh:
-        fh.seek(0, 2)  # seek to end
-        file_size = fh.tell()
-        fh.seek(0)
-
-        # fmt chunk occupies bytes 12-35 (24 bytes).
-        # Everything after byte 36 may be LIST, data, or both.
-        offset = 36
-        while offset + 8 <= file_size:
-            fh.seek(offset)
-            four = fh.read(4)
-            if len(four) < 4:
-                break
-            if four == b"data":
-                sz_raw = fh.read(4)
-                if len(sz_raw) < 4:
-                    break
-                current_size = struct.unpack("<I", sz_raw)[0]
-
-                # The data chunk's content extends from the end of its
-                # size field to the end of the file.
-                correct_size = file_size - (offset + 8)
-                if current_size != correct_size:
-                    fh.seek(offset + 4)
-                    fh.write(struct.pack("<I", correct_size))
-                    logger.debug("Fixed data chunk at offset %d: %d → %d",
-                                 offset, current_size, correct_size)
-            else:
-                # Non-data chunk — read its size, skip over it
-                fh.seek(offset + 4)
-                sz_raw = fh.read(4)
-                if len(sz_raw) < 4:
-                    break
-                chunk_size = struct.unpack("<I", sz_raw)[0]
-                # Advance to next chunk: skip chunk body + padding
-                offset += 8 + chunk_size
-                if chunk_size % 2:  # odd-sized chunks are padded
-                    offset += 1
-
 
 # --------------- CLI entry point ---------------
 
