@@ -1,4 +1,5 @@
 import express from 'express'
+import { Readable } from 'stream'
 import dotenv from 'dotenv'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -9,34 +10,57 @@ const envPath = path.resolve(scriptDir, '.env')
 dotenv.config({ path: envPath, override: true })
 
 const app = express()
-const ORCHESTRATOR_URL = process.env.ORCHESTRATOR_URL || 'http://localhost:8080/qwen-frontend'
-const VLLM_BASE_URL = process.env.VLLM_BASE_URL || 'http://localhost:8000'
+
+// In Docker Compose these resolve via the Docker DNS (e.g. "http://orchestrator:8080").
+// When running standalone, fall back to localhost for dev-mode convenience.
+const ORCHESTRATOR_URL =
+  process.env.ORCHESTRATOR_URL || 'http://localhost:8080'
+const VLLM_BASE_URL =
+  process.env.VLLM_BASE_URL || 'http://localhost:8000'
 const VLLM_API_KEY = process.env.VLLM_API_KEY || ''
 
-// Proxy /orchestrate to FastAPI orchestrator (raw body — needed for audio uploads)
-// Must come BEFORE express.json() so binary bodies aren't parsed
-app.use('/orchestrate', async (req, res, next) => {
+// Proxy /orchestrate to FastAPI orchestrator — pass through raw body as-is.
+// Must come BEFORE express.json() so multipart/form-data stays untouched.
+app.use('/orchestrate', async (req, res) => {
   const targetUrl = `${ORCHESTRATOR_URL}${req.originalUrl}`
-  console.log(`[proxy] ${req.method} ${targetUrl}`)
+  console.log(`[proxy] ${req.method} ${targetUrl}  content-type=${req.headers['content-type']}`)
 
-  const fetchOptions = {
-    method: req.method,
-    headers: { ...req.headers },
-    ...(req.body ? { body: req.body } : {}),
+  // Collect the raw request body into a Buffer to ensure we capture all data
+  // (Express's internal stream may consume data before we read it).
+  let bodyBuffer = null
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    bodyBuffer = await new Promise((resolve, reject) => {
+      const chunks = []
+      req.on('data', chunk => chunks.push(chunk))
+      req.on('end', () => resolve(Buffer.concat(chunks)))
+      req.on('error', reject)
+    })
+    console.log(`[proxy] body size: ${bodyBuffer?.length ?? 0} bytes, content-type=${req.headers['content-type']}`)
   }
-  // Remove content-length; Node auto-sets transfer-encoding: chunked
-  delete fetchOptions.headers['content-length']
+
+  const fetchHeaders = { ...req.headers }
+  console.log(`[proxy] forwarding content-type: ${fetchHeaders['content-type']}`)
+  // Let Node's fetch() set content-length / transfer-encoding automatically.
+  delete fetchHeaders['content-length']
 
   try {
-    const response = await fetch(targetUrl, fetchOptions)
+    const response = await fetch(targetUrl, {
+      method: req.method,
+      headers: fetchHeaders,
+      body: bodyBuffer,
+    })
+
     // Forward response headers (skip hop-by-hop)
     for (const [key, value] of response.headers.entries()) {
       if (!['transfer-encoding', 'connection'].includes(key.toLowerCase())) {
         res.setHeader(key, value)
       }
     }
+
     if (response.body) {
-      response.body.pipe(res)
+      // Convert Web ReadableStream → Node Readable
+      const nodeStream = Readable.fromWeb(response.body, { objectMode: false })
+      nodeStream.pipe(res)
     } else {
       res.end()
     }

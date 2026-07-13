@@ -1,0 +1,174 @@
+# ============================================================
+# Qwen-frontend multi-service stack
+# ============================================================
+#
+# Services:
+#   frontend       — nginx serving React build (port 80)
+#   proxy-server   — Node.js Express proxy (port 3001)
+#   orchestrator   — Python FastAPI + GPU inference (port 8080)
+#   vllm           — vLLM serving Qwen3.6-35B-NVFP4 (port 8000)
+#
+# Usage:
+#   docker compose up -d          # start all services
+#   docker compose logs -f        # tail all logs
+#   docker compose down -v        # stop + remove volumes
+#
+# ============================================================
+
+x-common-env: &common-env
+  VLLM_BASE_URL: "http://vllm:8000"
+  VLLM_API_KEY: "${VLLM_API_KEY:-}"
+
+services:
+  # ------------------------------------------------------------------
+  # 1. FRONTEND — React SPA served by nginx, with reverse-proxy to
+  #    the Node.js proxy server for API calls.
+  # ------------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend/Dockerfile
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    depends_on:
+      proxy-server:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "nginx -t"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ------------------------------------------------------------------
+  # 2. PROXY SERVER — Node.js/Express reverse proxy.
+  #    Forwards /api/* → vLLM  and  /orchestrate/* → orchestrator.
+  # ------------------------------------------------------------------
+  proxy-server:
+    build:
+      context: .
+      dockerfile: docker/proxy/Dockerfile
+    ports:
+      - "${PROXY_PORT:-3001}:3001"
+    environment:
+      <<: *common-env
+      ORCHESTRATOR_URL: "http://orchestrator:8080"
+      PORT: "3001"
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ------------------------------------------------------------------
+  # 3. ORCHESTRATOR — Python/FastAPI with GPU inference.
+  #    Loads ASR (Parakeet) + TTS (Kokoro) models at startup.
+  # ------------------------------------------------------------------
+  orchestrator:
+    build:
+      context: .
+      dockerfile: docker/orchestrator/Dockerfile
+    ports:
+      - "${ORCHESTRATOR_PORT:-8080}:8080"
+    environment:
+      <<: *common-env
+      VLLM_MODEL: "${VLLM_MODEL:-qwen3.6-35b-a3b-nvfp4}"
+      TTS_VOICE: "${TTS_VOICE:-af_bella}"
+    volumes:
+      # Shared HuggingFace model cache — both vLLM and orchestrator
+      # write here so models downloaded by one are available to the other.
+      - hf-cache:/hf
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/orchestrate').read()\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s  # first-load model download can take several minutes
+
+  # ------------------------------------------------------------------
+  # 4. vLLM — LLM serving container (external GPU workload).
+  #    Run independently; this compose entry is for convenience.
+  # ------------------------------------------------------------------
+  # vllm:
+  #   image: ghcr.io/spark-arena/dgx-vllm-eugr-nightly-tf5:latest
+  #   ports:
+  #     - "${VLLM_PORT:-8000}:8000"
+  #   environment:
+  #     HF_HUB_DISABLE_XET: "1"
+  #     HF_HUB_DOWNLOAD_TIMEOUT: "60"
+  #     HF_HUB_ETAG_TIMEOUT: "60"
+  #     HF_HOME: /hf
+  #     HF_TOKEN: "${HF_TOKEN:-}"
+  #     VLLM_API_KEY: "${VLLM_API_KEY:-}"
+  #   volumes:
+  #     - hf-cache:/hf
+  #   command: >
+  #     vllm serve RedHatAI/Qwen3.6-35B-A3B-NVFP4
+  #       --served-model-name qwen3.6-35b-a3b-nvfp4
+  #       --host 0.0.0.0 --port 8000
+  #       --tensor-parallel-size 1
+  #       --gpu-memory-utilization 0.93
+  #       --max-model-len 262144
+  #       --moe_backend flashinfer_cutlass
+  #       --enable-auto-tool-choice
+  #       --tool-call-parser qwen3_xml
+  #       --reasoning-parser qwen3
+  #       --speculative-config '{"method":"mtp","num_speculative_tokens":3}'
+  #       --trust-remote-code
+  #       --kv-cache-dtype fp8_e4m3
+  #       --enable-prefix-caching
+  #       --enable-chunked-prefill
+  #       --max-num-batched-tokens 8192
+  #       --async-scheduling
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: [gpu]
+  #   networks:
+  #     - app-network
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()\""]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 5
+  #     start_period: 120s
+
+# ------------------------------------------------------------------
+# Shared volume for HuggingFace model caching.
+# Models downloaded by vLLM at startup are available to the
+# orchestrator (and vice versa) without re-downloading.
+# ------------------------------------------------------------------
+volumes:
+  hf-cache:
+    name: qwen-hf-cache
+
+# ------------------------------------------------------------------
+# Single Docker network for inter-service communication.
+# Containers reach each other by service name:
+#   http://vllm:8000          — vLLM LLM serving
+#   http://orchestrator:8080  — FastAPI orchestrator
+#   http://proxy-server:3001  — Node.js proxy
+# ------------------------------------------------------------------
+networks:
+  app-network:
+    driver: bridge

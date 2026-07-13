@@ -1,3 +1,10 @@
-fastapi
-uvicorn
-httpx
+fastapi>=0.103
+python-multipart
+uvicorn>=0.23
+httpx>=0.25
+pydantic>=2.0
+torch>=2.1
+torchaudio>=2.1
+transformers>=4.35
+kokoro>=0.9.4
+misaki>=0.1.0

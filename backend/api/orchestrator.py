@@ -65,7 +65,7 @@ from parakeet_service.asr import transcribe, _get_pipeline as _get_asr_pipeline
 
 # --------------- configuration ---------------
 
-VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://localhost:8000")
+VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://vllm:8000")
 VLLM_API_KEY = os.environ.get("VLLM_API_KEY", "")
 VLLM_MODEL = os.environ.get("VLLM_MODEL", "qwen3.6-35b-a3b-nvfp4")
 TTS_VOICE = os.environ.get("TTS_VOICE", "af_bella")
