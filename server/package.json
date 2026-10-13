@@ -17,6 +17,6 @@
     "express": "^5.2.1"
   },
   "devDependencies": {
-    "concurrently": "^10.0.4"
+    "concurrently": "^10.0.6"
   }
 }
